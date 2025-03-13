@@ -499,25 +499,36 @@ class MFormer(nn.Module):
 
         return outputs_class, outputs_mask, attn_mask, mask_embed
 
-    def apply_gaussian_kernel(self, corr, spatial_side, sigma=10):
-        bsz, side1, side2 = corr.size()
+    def apply_gaussian_kernel(self, corr, spatial_height, spatial_width, sigma=10):
+        bsz, nm, _ = corr.size()
 
+        # Get max correlation index for each query
         center = corr.max(dim=2)[1]
-        center_y = center // spatial_side
-        center_x = center % spatial_side
+        
+        # Compute y, x coordinates from the flattened index
+        center_y = center // spatial_width  # Row index (height)
+        center_x = center % spatial_width  # Column index (width)
 
-        x = torch.arange(0, spatial_side).float().to(corr.device)
-        y = torch.arange(0, spatial_side).float().to(corr.device)
+        # Create coordinate grid
+        x = torch.arange(0, spatial_width).float().to(corr.device)
+        y = torch.arange(0, spatial_height).float().to(corr.device)
 
-        y = y.view(1, 1, spatial_side).repeat(bsz, center_y.size(1), 1) - center_y.unsqueeze(2)
-        x = x.view(1, 1, spatial_side).repeat(bsz, center_x.size(1), 1) - center_x.unsqueeze(2)
+        # Compute y-distance and x-distance from the center
+        y = y.view(1, 1, spatial_height).repeat(bsz, nm, 1) - center_y.unsqueeze(2)
+        x = x.view(1, 1, spatial_width).repeat(bsz, nm, 1) - center_x.unsqueeze(2)
 
-        y = y.unsqueeze(3).repeat(1, 1, 1, spatial_side)
-        x = x.unsqueeze(2).repeat(1, 1, spatial_side, 1)
+        # Expand dimensions for proper broadcasting
+        y = y.unsqueeze(3).repeat(1, 1, 1, spatial_width)  # (B, nm, H, W)
+        x = x.unsqueeze(2).repeat(1, 1, spatial_height, 1)  # (B, nm, H, W)
 
+        # Compute Gaussian kernel with different H and W
         gauss_kernel = torch.exp(-(x.pow(2) + y.pow(2)) / (2 * sigma ** 2))
-        filtered_corr = gauss_kernel * corr.view(bsz, -1, spatial_side, spatial_side)
-        filtered_corr = filtered_corr.view(bsz, side1, side2)
+
+        # Reshape correlation map to match (B, nm, H, W)
+        filtered_corr = gauss_kernel * corr.view(bsz, nm, spatial_height, spatial_width)
+
+        # Restore shape back to (B, nm, H*W)
+        filtered_corr = filtered_corr.view(bsz, nm, spatial_height * spatial_width)
 
         return filtered_corr
 
@@ -584,7 +595,7 @@ class MFormer(nn.Module):
         id_query_feat_norm = F.normalize(id_query_feat, dim=-1, p=2)
         corr_matrix = torch.einsum('nac,nbc->nab', id_query_feat_norm, image_feat_norm)  # 1, nm, HW
 
-        id_corr_matrix = self.apply_gaussian_kernel(corr_matrix, h)
+        id_corr_matrix = self.apply_gaussian_kernel(corr_matrix, h, w)
         id_dist = torch.softmax(id_corr_matrix * self.temp, dim=-1)
         id_embed = torch.einsum('nab,nbc->nac', id_dist, image_pe)
         output_id = id_query_feat # bs, nm, c

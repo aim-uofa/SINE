@@ -2,7 +2,7 @@ torch==2.0.1
 torchvision==0.15.2
 xformers==0.0.21
 opencv-python==4.8.0.76
-timm==0.9.17
+timm==1.0.3
 omegaconf==2.3.0
 numpy==1.26.1
 tqdm==4.66.1
